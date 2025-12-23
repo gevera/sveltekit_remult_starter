@@ -36,6 +36,7 @@
 		"vite-plugin-kit-routes": "^1.0.2"
 	},
 	"dependencies": {
+		"@libsql/client": "^0.15.15",
 		"@scalar/sveltekit": "^0.1.34"
 	}
 }

@@ -1,4 +1,3 @@
-// routes/+server.ts
 import { ScalarApiReference } from '@scalar/sveltekit';
 import type { RequestHandler } from './$types';
 const render = ScalarApiReference({
