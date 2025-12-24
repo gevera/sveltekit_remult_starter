@@ -1,4 +1,4 @@
-import { Planet } from '$lib/entites/planets';
+import { Planet } from '$entities/planets';
 import { SqlDatabase } from 'remult';
 import { remultApi } from 'remult/remult-sveltekit';
 import { TursoDataProvider } from 'remult/remult-turso';
