@@ -1,8 +1,14 @@
 import { ScalarApiReference } from '@scalar/sveltekit';
 import type { RequestHandler } from './$types';
+
 const render = ScalarApiReference({
-	url: '/api/openapi.json'
+	pageTitle: 'API Documentation',
+	sources: [
+		{ url: '/api/openapi.json', title: 'Remult API' },
+		{ url: '/api/auth/open-api/generate-schema', title: 'Authentication' }
+	]
 });
+
 export const GET: RequestHandler = () => {
 	return render();
 };
