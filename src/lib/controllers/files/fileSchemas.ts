@@ -1,46 +1,86 @@
-import * as v from 'valibot';
+import { Fields } from 'remult';
 
-// Schemas
-export const fileDataSchema = v.object({
-	name: v.pipe(v.string('File name must be a string.'), v.nonEmpty('File name is required.')),
-	type: v.pipe(v.string('File type must be a string.'), v.nonEmpty('File type is required.')),
-	data: v.pipe(
-		v.string('File data must be a base64 encoded string.'),
-		v.nonEmpty('File data is required.')
-	)
-});
+// File data schema - for uploading files
+export class FileDataSchema {
+	@Fields.string({
+		required: true
+	})
+	name = '';
 
-export const uploadFileResultSchema = v.object({
-	key: v.string('Key must be a string.'),
-	url: v.string('URL must be a string.'),
-	size: v.number('Size must be a number.'),
-	contentType: v.string('Content type must be a string.')
-});
+	@Fields.string({
+		required: true
+	})
+	type = '';
 
-export const fileInfoSchema = v.object({
-	key: v.string('Key must be a string.'),
-	size: v.number('Size must be a number.'),
-	lastModified: v.date('Last modified must be a date.'),
-	etag: v.string('ETag must be a string.')
-});
+	@Fields.string({
+		required: true
+	})
+	data = '';
+}
 
-export const deleteFileResultSchema = v.object({
-	success: v.boolean('Success must be a boolean.')
-});
+// Upload file result schema
+export class UploadFileResultSchema {
+	@Fields.string()
+	key = '';
 
-export const downloadUrlResultSchema = v.object({
-	url: v.string('URL must be a string.')
-});
+	@Fields.string()
+	url = '';
 
-// Exported interfaces from schemas
-export type FileData = v.InferInput<typeof fileDataSchema>;
-export type UploadFileResult = v.InferOutput<typeof uploadFileResultSchema>;
-export type FileInfo = v.InferOutput<typeof fileInfoSchema>;
-export type DeleteFileResult = v.InferOutput<typeof deleteFileResultSchema>;
-export type DownloadUrlResult = v.InferOutput<typeof downloadUrlResultSchema>;
+	@Fields.number()
+	size = 0;
 
-export const keySchema = v.pipe(v.string('Key must be a string.'), v.nonEmpty('Key is required.'));
+	@Fields.string()
+	contentType = '';
+}
 
-export const prefixSchema = v.optional(v.string('Prefix must be a string.'));
+// File info schema - for listing files
+export class FileInfoSchema {
+	@Fields.string()
+	key = '';
 
-export const pathSchema = v.optional(v.string('Path must be a string.'));
+	@Fields.number()
+	size = 0;
+
+	@Fields.date()
+	lastModified = new Date();
+
+	@Fields.string()
+	etag = '';
+}
+
+// Delete file result schema
+export class DeleteFileResultSchema {
+	@Fields.boolean()
+	success = false;
+}
+
+// Download URL result schema
+export class DownloadUrlResultSchema {
+	@Fields.string()
+	url = '';
+}
+
+// Simple validation schemas for parameters
+export class KeySchema {
+	@Fields.string({
+		required: true
+	})
+	key = '';
+}
+
+export class PrefixSchema {
+	@Fields.string()
+	prefix = '';
+}
+
+export class PathSchema {
+	@Fields.string()
+	path = '';
+}
+
+// Exported types from schemas
+export type FileData = FileDataSchema;
+export type UploadFileResult = UploadFileResultSchema;
+export type FileInfo = FileInfoSchema;
+export type DeleteFileResult = DeleteFileResultSchema;
+export type DownloadUrlResult = DownloadUrlResultSchema;

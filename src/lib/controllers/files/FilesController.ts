@@ -1,15 +1,14 @@
 import { randomUUID } from 'crypto';
 import { BackendMethod } from 'remult';
-import * as v from 'valibot';
+import { validateSchema } from '$lib/utils';
 import {
-	deleteFileResultSchema,
-	downloadUrlResultSchema,
-	fileDataSchema,
-	fileInfoSchema,
-	keySchema,
-	pathSchema,
-	prefixSchema,
-	uploadFileResultSchema,
+	FileDataSchema,
+	UploadFileResultSchema,
+	FileInfoSchema,
+	DeleteFileResultSchema,
+	DownloadUrlResultSchema,
+	KeySchema,
+	PathSchema,
 	type DeleteFileResult,
 	type DownloadUrlResult,
 	type FileInfo,
@@ -39,11 +38,11 @@ export class FilesController {
 	@BackendMethod({ allowed: true })
 	static async uploadFile(fileData: unknown, path?: string): Promise<UploadFileResult> {
 		// Validate fileData
-		const validatedFileData = v.parse(fileDataSchema, fileData);
+		const validatedFileData = await validateSchema(FileDataSchema, fileData);
 
 		// Validate path if provided
 		if (path !== undefined) {
-			v.parse(pathSchema, path);
+			await validateSchema(PathSchema, { path });
 		}
 
 		const fileExtension = validatedFileData.name.split('.').pop() || '';
@@ -61,7 +60,7 @@ export class FilesController {
 
 		await s3Client.putObject(key, buffer, validatedFileData.type);
 
-		const result: UploadFileResult = {
+		const resultData = {
 			key,
 			url: `/api/images/${key}`,
 			size: buffer.length,
@@ -69,7 +68,7 @@ export class FilesController {
 		};
 
 		// Validate result before returning
-		return v.parse(uploadFileResultSchema, result);
+		return await validateSchema(UploadFileResultSchema, resultData);
 	}
 
 	/**
@@ -82,16 +81,16 @@ export class FilesController {
 	@BackendMethod({ allowed: true })
 	static async deleteFile(key: unknown): Promise<DeleteFileResult> {
 		// Validate key
-		const validatedKey = v.parse(keySchema, key);
+		const validatedKeyData = await validateSchema(KeySchema, { key });
 
-		const deleted = await s3Client.deleteObject(validatedKey);
+		const deleted = await s3Client.deleteObject(validatedKeyData.key);
 
-		const result: DeleteFileResult = {
+		const resultData = {
 			success: deleted
 		};
 
 		// Validate result before returning
-		return v.parse(deleteFileResultSchema, result);
+		return await validateSchema(DeleteFileResultSchema, resultData);
 	}
 
 	/**
@@ -106,10 +105,8 @@ export class FilesController {
 	 */
 	@BackendMethod({ allowed: true })
 	static async listFiles(prefix?: string): Promise<FileInfo[]> {
-		// Validate prefix if provided
-		const validatedPrefix = prefix !== undefined ? v.parse(prefixSchema, prefix) : undefined;
-
-		const objects = await s3Client.listObjects('/', validatedPrefix || '');
+		// No validation needed for optional prefix (it's just a string filter)
+		const objects = await s3Client.listObjects('/', prefix || '');
 
 		if (!objects) {
 			return [];
@@ -124,7 +121,7 @@ export class FilesController {
 		}));
 
 		// Validate each file info
-		return fileInfos.map((info) => v.parse(fileInfoSchema, info));
+		return await Promise.all(fileInfos.map((info) => validateSchema(FileInfoSchema, info)));
 	}
 
 	/**
@@ -137,15 +134,15 @@ export class FilesController {
 	@BackendMethod({ allowed: true })
 	static async getDownloadUrl(key: unknown): Promise<DownloadUrlResult> {
 		// Validate key
-		const validatedKey = v.parse(keySchema, key);
+		const validatedKeyData = await validateSchema(KeySchema, { key });
 
 		// For public buckets, we can return the direct URL
 		// For now, return the API route URL
-		const result: DownloadUrlResult = {
-			url: `/api/images/${validatedKey}`
+		const resultData = {
+			url: `/api/images/${validatedKeyData.key}`
 		};
 
 		// Validate result before returning
-		return v.parse(downloadUrlResultSchema, result);
+		return await validateSchema(DownloadUrlResultSchema, resultData);
 	}
 }
