@@ -4,8 +4,16 @@ import type { PageServerLoad } from './$types';
 
 export const load = (async () => {
 	const files = await FilesController.listFiles();
-	console.log('FILES >>>', files);
-	return { files };
+
+	// Convert Remult entities to plain objects for SvelteKit serialization
+	const plainFiles = files.map((file) => ({
+		key: file.key,
+		size: file.size,
+		lastModified: file.lastModified,
+		etag: file.etag
+	}));
+
+	return { files: plainFiles };
 }) satisfies PageServerLoad;
 
 export const actions = {
