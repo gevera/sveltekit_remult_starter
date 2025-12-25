@@ -13,9 +13,10 @@ const config = {
 		// See https://svelte.dev/docs/kit/adapters for more information about adapters.
 		adapter: adapter(),
 		alias: {
-			$server: './src/server',
+			$controllers: './src/lib/controllers',
 			$entities: './src/lib/entities',
-			$modules: './src/modules'
+			$modules: './src/modules',
+			$server: './src/server',
 		}
 	},
 	vitePlugin: {

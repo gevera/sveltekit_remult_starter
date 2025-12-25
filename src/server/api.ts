@@ -1,10 +1,11 @@
+import { FilesController } from '$controllers/files/FilesController';
 import { Planet } from '$entities/planets';
+import { env } from '$env/dynamic/private';
+import { auth } from '$modules/auth/server/index';
+import { createClient } from '@libsql/client';
 import { SqlDatabase } from 'remult';
 import { remultApi } from 'remult/remult-sveltekit';
 import { TursoDataProvider } from 'remult/remult-turso';
-import { createClient } from '@libsql/client';
-import { env } from '$env/dynamic/private';
-import { auth } from '$modules/auth/server/index';
 
 export const api = remultApi({
 	entities: [Planet],
@@ -17,10 +18,13 @@ export const api = remultApi({
 			})
 		)
 	),
-	modules: [auth({
-		   // Add some roles to some users with env variable.
+	controllers: [FilesController],
+	modules: [
+		auth({
+			// Add some roles to some users with env variable.
 			// SUPER_ADMIN_EMAILS
-	})]
+		})
+	],
 });
 
 export const openApiDocument = api.openApiDoc({ title: 'remult-planets' });
