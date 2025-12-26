@@ -1,6 +1,8 @@
 import type { ClassType } from 'remult';
 import { getFields } from 'remult';
 import type { RemultSveltekitServer } from 'remult/remult-sveltekit';
+import { match } from 'ts-pattern';
+import { pipe, filter, map, find, flatMap } from 'remeda';
 
 // Remult internal symbols for accessing BackendMethod metadata
 const classBackendMethodsArray = Symbol.for('classBackendMethodsArray');
@@ -13,49 +15,102 @@ const controllerParameterTypesMap = Symbol.for('controllerParameterTypesMap');
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string | symbol, any>;
 
+type PrimitiveType = 'string' | 'number' | 'boolean' | 'object';
+type TypeMetadata = { type?: PrimitiveType; schema?: ClassType<unknown>; isArray?: boolean; optional?: boolean };
+type OpenApiSchema = { type?: string; items?: unknown; properties?: unknown; required?: string[]; oneOf?: unknown[]; description?: string; format?: string };
+
 /**
  * Convert a Remult class schema to OpenAPI schema
  */
-function classToOpenApiSchema(schemaClass: ClassType<unknown>) {
+function classToOpenApiSchema(schemaClass: ClassType<unknown>): OpenApiSchema {
 	try {
 		const instance = new schemaClass();
 		const fieldsRef = getFields(instance);
-		const properties: Record<string, { type: string; format?: string }> = {};
-		const required: string[] = [];
+		const fieldsArray = Array.from(fieldsRef);
+		
+		const fieldSchemas = pipe(
+			fieldsArray,
+			map((fieldRef) => {
+				const { metadata } = fieldRef;
+				const fieldKey = metadata.key as string;
+				const valueType = metadata.valueType;
+				
+				const { type, format } = match(valueType)
+					.when((v) => v === Number, () => ({ type: 'number' as const, format: undefined as string | undefined }))
+					.when((v) => v === Boolean, () => ({ type: 'boolean' as const, format: undefined as string | undefined }))
+					.when((v) => v === Date, () => ({ type: 'string' as const, format: 'date-time' as string }))
+					.otherwise(() => ({ type: 'string' as const, format: undefined as string | undefined }));
 
-		for (const fieldRef of fieldsRef) {
-			const fieldMeta = fieldRef.metadata;
-			const fieldKey = fieldMeta.key as string;
-			let type = 'string';
-			let format: string | undefined;
+				const schema = match(format)
+					.with(undefined, () => ({ type }))
+					.otherwise(() => ({ type, format }));
 
-			// Map Remult field types to OpenAPI types
-			if (fieldMeta.valueType === Number) {
-				type = 'number';
-			} else if (fieldMeta.valueType === Boolean) {
-				type = 'boolean';
-			} else if (fieldMeta.valueType === Date) {
-				type = 'string';
-				format = 'date-time';
-			}
+				return {
+					key: fieldKey,
+					schema,
+					required: metadata.options.required ?? false
+				};
+			})
+		);
 
-			properties[fieldKey] = { type, ...(format && { format }) };
+		const properties = Object.fromEntries(
+			fieldSchemas.map(({ key, schema }) => [key, schema])
+		);
 
-			// Check if field is required
-			if (fieldMeta.options.required) {
-				required.push(fieldKey);
-			}
-		}
+		const required = pipe(
+			fieldSchemas,
+			filter((f) => f.required),
+			map((f) => f.key)
+		);
 
-		return {
-			type: 'object',
-			properties,
-			...(required.length > 0 && { required })
-		};
+		return match(required.length > 0)
+			.with(true, () => ({
+				type: 'object',
+				properties,
+				required
+			}))
+			.otherwise(() => ({
+				type: 'object',
+				properties
+			}));
 	} catch {
-		// If schema introspection fails, return generic object
 		return { type: 'object' };
 	}
+}
+
+/**
+ * Generic helper to get metadata from various sources
+ */
+function getMetadata(
+	method: unknown,
+	controller: ClassType<unknown>,
+	methodName: string,
+	symbol: symbol,
+	mapSymbol: symbol
+): unknown {
+	const map = (controller as AnyObj)[mapSymbol] as Map<string, unknown> | undefined;
+	const controllerMethod = (controller as AnyObj)[methodName];
+	const methodFn = (method as AnyObj).fn;
+
+	const sources = [
+		map?.get(methodName),
+		(method as AnyObj)[symbol],
+		controllerMethod ? (controllerMethod as AnyObj)[symbol] : undefined,
+		methodFn ? (methodFn as AnyObj)[symbol] : undefined
+	];
+
+	return find(sources, (v) => v !== undefined) ?? undefined;
+}
+
+/**
+ * Convert type metadata to OpenAPI schema
+ */
+function typeToSchema(metadata: TypeMetadata): OpenApiSchema {
+	return match(metadata)
+		.when((m) => Boolean(m.isArray && m.schema), (m) => ({ type: 'array', items: classToOpenApiSchema(m.schema!) }))
+		.when((m) => Boolean(m.schema), (m) => classToOpenApiSchema(m.schema!))
+		.when((m) => Boolean(m.type), (m) => ({ type: m.type! }))
+		.otherwise(() => ({ type: 'object' }));
 }
 
 /**
@@ -65,91 +120,21 @@ function inferResponseSchema(
 	method: unknown,
 	controller: ClassType<unknown>,
 	methodName: string
-): { type: string; items?: unknown; properties?: unknown; required?: string[] } {
-	// First, try to get metadata from the controller's return types map
-	// This is the most reliable way since we store it there explicitly
-	const returnTypesMap = (controller as AnyObj)[controllerReturnTypesMap] as
-		| Map<string, unknown>
-		| undefined;
-	let methodMetadata = returnTypesMap?.get(methodName) as
-		| { type?: string; schema?: ClassType<unknown>; isArray?: boolean }
-		| undefined;
+): OpenApiSchema {
+	const methodMetadata = getMetadata(
+		method,
+		controller,
+		methodName,
+		returnTypeSymbol,
+		controllerReturnTypesMap
+	) as TypeMetadata | undefined;
 
-	// If not found in map, try to get metadata from the method object (might be a wrapper)
-	if (!methodMetadata) {
-		methodMetadata = (method as AnyObj)[returnTypeSymbol];
-	}
-
-	// If still not found, try to get it from the controller's static method
-	if (!methodMetadata) {
-		const controllerMethod = (controller as AnyObj)[methodName];
-		if (controllerMethod) {
-			methodMetadata = (controllerMethod as AnyObj)[returnTypeSymbol];
-		}
-	}
-
-	// Also check if the method has a 'fn' property (common in wrappers)
-	if (!methodMetadata && (method as AnyObj).fn) {
-		methodMetadata = ((method as AnyObj).fn as AnyObj)[returnTypeSymbol];
-	}
-
-	if (methodMetadata) {
-		if (methodMetadata.isArray && methodMetadata.schema) {
-			return {
-				type: 'array',
-				items: classToOpenApiSchema(methodMetadata.schema)
-			};
-		}
-		if (methodMetadata.schema) {
-			return classToOpenApiSchema(methodMetadata.schema);
-		}
-		if (methodMetadata.type === 'string') {
-			return { type: 'string' };
-		}
-		if (methodMetadata.type === 'number') {
-			return { type: 'number' };
-		}
-		if (methodMetadata.type === 'boolean') {
-			return { type: 'boolean' };
-		}
-	}
-
-	// Default to generic object for unknown types
-	return { type: 'object' };
-}
-
-/**
- * Convert a parameter type definition to OpenAPI schema
- * Always uses the full schema object structure for schema parameters
- */
-function parameterTypeToSchema(
-	paramType: { type?: string; schema?: ClassType<unknown>; isArray?: boolean; optional?: boolean }
-): { type?: string; items?: unknown; properties?: unknown; required?: string[]; oneOf?: unknown[] } {
-	if (paramType.isArray && paramType.schema) {
-		// For arrays of schemas, always use the full schema object
-		return {
-			type: 'array',
-			items: classToOpenApiSchema(paramType.schema)
-		};
-	}
-	if (paramType.schema) {
-		// For schema parameters, always use the full schema object structure
-		// This ensures the request body matches the schema definition exactly
-		return classToOpenApiSchema(paramType.schema);
-	}
-	if (paramType.type === 'string') {
-		return { type: 'string' };
-	}
-	if (paramType.type === 'number') {
-		return { type: 'number' };
-	}
-	if (paramType.type === 'boolean') {
-		return { type: 'boolean' };
-	}
-	if (paramType.type === 'object') {
-		return { type: 'object' };
-	}
-	return { type: 'object' };
+	return match(methodMetadata)
+		.with(undefined, () => ({ type: 'object' }))
+		.when((m) => Boolean(m.isArray && m.schema), (m) => ({ type: 'array', items: classToOpenApiSchema(m.schema!) }))
+		.when((m) => Boolean(m.schema), (m) => classToOpenApiSchema(m.schema!))
+		.when((m) => Boolean(m.type), (m) => ({ type: m.type! }))
+		.otherwise(() => ({ type: 'object' }));
 }
 
 /**
@@ -161,116 +146,108 @@ function inferRequestSchema(
 	controller: ClassType<unknown>,
 	methodName: string
 ): { type: string; properties?: unknown; required?: string[] } {
-	// First, try to get metadata from the controller's parameter types map
-	// This is the most reliable way since we store it there explicitly
-	const parameterTypesMap = (controller as AnyObj)[controllerParameterTypesMap] as
-		| Map<string, unknown>
-		| undefined;
-	let methodMetadata = parameterTypesMap?.get(methodName) as
-		| Array<{ type?: string; schema?: ClassType<unknown>; isArray?: boolean; optional?: boolean }>
-		| { type?: string; schema?: ClassType<unknown>; isArray?: boolean; optional?: boolean }
-		| undefined;
+	const methodMetadata = getMetadata(
+		method,
+		controller,
+		methodName,
+		parameterTypeSymbol,
+		controllerParameterTypesMap
+	) as TypeMetadata | TypeMetadata[] | undefined;
 
-	// If not found in map, try to get metadata from the method object (might be a wrapper)
-	if (!methodMetadata) {
-		methodMetadata = (method as AnyObj)[parameterTypeSymbol];
-	}
-
-	// If still not found, try to get it from the controller's static method
-	if (!methodMetadata) {
-		const controllerMethod = (controller as AnyObj)[methodName];
-		if (controllerMethod) {
-			methodMetadata = (controllerMethod as AnyObj)[parameterTypeSymbol];
-		}
-	}
-
-	// Also check if the method has a 'fn' property (common in wrappers)
-	if (!methodMetadata && (method as AnyObj).fn) {
-		methodMetadata = ((method as AnyObj).fn as AnyObj)[parameterTypeSymbol];
-	}
-
-	// Remult backend methods always use { "args": [...] } format
-	// Even with no arguments, args must be present as an empty array
-	
-	// If we have parameter metadata, build the args array schema
-	if (methodMetadata) {
-		// Check if it's an array (multiple parameters) or single parameter
-		const paramTypes = Array.isArray(methodMetadata) ? methodMetadata : [methodMetadata];
-		
-		// Count required parameters (non-optional ones)
-		const requiredCount = paramTypes.filter((p) => !p.optional).length;
-		
-		// Convert each parameter type to a schema
-		const argSchemas = paramTypes.map((paramType) => parameterTypeToSchema(paramType));
-		
-		// Build description showing the expected argument structure
-		const argDescriptions = paramTypes.map((p, i) => {
-			const typeDesc = p.schema ? p.schema.name : p.type || 'object';
-			return `arg${i}: ${typeDesc}${p.optional ? ' (optional)' : ''}`;
-		});
-		
-		// Determine the items schema for the args array
-		let itemsSchema: { type?: string; items?: unknown; properties?: unknown; oneOf?: unknown[]; description?: string };
-		
-		if (argSchemas.length === 0) {
-			// No arguments - empty array
-			itemsSchema = {};
-		} else if (argSchemas.length === 1) {
-			// Single argument - use its schema directly
-			itemsSchema = argSchemas[0];
-		} else {
-			// Multiple arguments - check if all are the same type
-			const firstSchema = argSchemas[0];
-			const allSameType = argSchemas.every((schema) => 
-				JSON.stringify(schema) === JSON.stringify(firstSchema)
-			);
-			
-			if (allSameType) {
-				// All arguments are the same type - use that type directly
-				itemsSchema = firstSchema;
-			} else {
-				// Mixed types - use oneOf to allow any of the argument types
-				// Note: OpenAPI 3.0 doesn't support tuples perfectly, so we use oneOf
-				// The description will clarify the expected order
-				itemsSchema = {
-					oneOf: argSchemas,
-					description: `Arguments in order: ${argDescriptions.join(', ')}`
-				};
-			}
-		}
-
-		return {
+	return match(methodMetadata)
+		.with(undefined, () => ({
 			type: 'object',
 			properties: {
 				args: {
 					type: 'array',
-					items: itemsSchema,
-					...(requiredCount > 0 && { minItems: requiredCount }),
-					...(argSchemas.length > 0 && { maxItems: argSchemas.length }),
-					description: argSchemas.length === 0
-						? 'No arguments required (empty array)'
-						: argSchemas.length === 1
-							? `Method argument: ${argDescriptions[0]}`
-							: `Method arguments array. Expected order: ${argDescriptions.join(', ')}`
+					items: {},
+					description: 'No arguments required (empty array)'
 				}
 			},
 			required: ['args']
-		};
-	}
+		}))
+		.otherwise((metadata) => {
+			const paramTypes = match(metadata)
+				.when((m): m is TypeMetadata[] => Array.isArray(m), (m) => m)
+				.otherwise((m) => [m]);
+			
+			const requiredCount = pipe(
+				paramTypes,
+				filter((p) => !p.optional),
+				(x) => x.length
+			);
+			
+			const argSchemas = map(paramTypes, typeToSchema);
+			const argDescriptions = paramTypes.map((p, i) => {
+				const typeDesc = p.schema?.name || p.type || 'object';
+				return `arg${i}: ${typeDesc}${p.optional ? ' (optional)' : ''}`;
+			});
 
-	// Default to empty args array for methods without Accepts decorator
-	// Remult always requires { "args": [] } even when no arguments
-	return {
-		type: 'object',
-		properties: {
-			args: {
-				type: 'array',
-				items: {},
-				description: 'No arguments required (empty array)'
-			}
-		},
-		required: ['args']
-	};
+			const itemsSchema = match(argSchemas.length)
+				.with(0, () => ({} as OpenApiSchema))
+				.with(1, () => argSchemas[0])
+				.otherwise(() => {
+					const firstSchema = argSchemas[0];
+					const allSameType = argSchemas.every((s) => JSON.stringify(s) === JSON.stringify(firstSchema));
+					return match(allSameType)
+						.with(true, () => firstSchema)
+						.otherwise(() => ({
+							oneOf: argSchemas,
+							description: `Arguments in order: ${argDescriptions.join(', ')}`
+						}));
+				});
+
+			const description = match(argSchemas.length)
+				.with(0, () => 'No arguments required (empty array)')
+				.with(1, () => `Method argument: ${argDescriptions[0]}`)
+				.otherwise(() => `Method arguments array. Expected order: ${argDescriptions.join(', ')}`);
+
+			return {
+				type: 'object',
+				properties: {
+					args: {
+						type: 'array',
+						items: itemsSchema,
+						...(requiredCount > 0 && { minItems: requiredCount }),
+						...(argSchemas.length > 0 && { maxItems: argSchemas.length }),
+						description
+					}
+				},
+				required: ['args']
+			};
+		});
+}
+
+/**
+ * Helper to store metadata in multiple places for reliable lookup
+ */
+function storeMetadata(
+	target: unknown,
+	propertyKey: string,
+	descriptor: PropertyDescriptor | undefined,
+	metadata: unknown,
+	symbol: symbol,
+	mapSymbol: symbol
+): PropertyDescriptor | undefined {
+	const obj = target as AnyObj;
+	const method = obj[propertyKey];
+	
+	match(method)
+		.when((m) => Boolean(m), (m) => ((m as AnyObj)[symbol] = metadata))
+		.otherwise(() => {});
+
+	match(descriptor?.value)
+		.when((v) => Boolean(v), (v) => ((v as AnyObj)[symbol] = metadata))
+		.otherwise(() => {});
+
+	match(obj[mapSymbol])
+		.with(undefined, () => {
+			obj[mapSymbol] = new Map<string, unknown>();
+		})
+		.otherwise(() => {});
+	
+	(obj[mapSymbol] as Map<string, unknown>).set(propertyKey, metadata);
+	return descriptor;
 }
 
 /**
@@ -293,35 +270,10 @@ function inferRequestSchema(
  * }
  */
 export function Returns(
-	returnType:
-		| { type: 'string' | 'number' | 'boolean' | 'object' }
-		| { schema: ClassType<unknown>; isArray?: boolean }
+	returnType: { type: PrimitiveType } | { schema: ClassType<unknown>; isArray?: boolean }
 ) {
-	return function (target: unknown, propertyKey: string, descriptor?: PropertyDescriptor) {
-		// Store metadata on the target's method property
-		// For static methods, target is the class constructor
-		const method = (target as AnyObj)[propertyKey];
-		if (method) {
-			(method as AnyObj)[returnTypeSymbol] = returnType;
-		}
-
-		// Also store on descriptor value if available
-		if (descriptor && descriptor.value) {
-			(descriptor.value as AnyObj)[returnTypeSymbol] = returnType;
-		}
-
-		// Store in a map on the controller class for reliable lookup
-		// This ensures we can find it even if the method is wrapped
-		if (!(target as AnyObj)[controllerReturnTypesMap]) {
-			(target as AnyObj)[controllerReturnTypesMap] = new Map<string, unknown>();
-		}
-		((target as AnyObj)[controllerReturnTypesMap] as Map<string, unknown>).set(
-			propertyKey,
-			returnType
-		);
-
-		return descriptor;
-	};
+	return (target: unknown, propertyKey: string, descriptor?: PropertyDescriptor) =>
+		storeMetadata(target, propertyKey, descriptor, returnType, returnTypeSymbol, controllerReturnTypesMap);
 }
 
 /**
@@ -354,107 +306,72 @@ export function Returns(
  * }
  */
 export function Accepts(
-	parameterTypes:
-		| { type: 'string' | 'number' | 'boolean' | 'object'; optional?: boolean }
-		| { schema: ClassType<unknown>; isArray?: boolean; optional?: boolean }
-		| Array<
-				| { type: 'string' | 'number' | 'boolean' | 'object'; optional?: boolean }
-				| { schema: ClassType<unknown>; isArray?: boolean; optional?: boolean }
-			>
+	parameterTypes: TypeMetadata | TypeMetadata[]
 ) {
-	return function (target: unknown, propertyKey: string, descriptor?: PropertyDescriptor) {
-		// Normalize to array format
-		const paramTypesArray = Array.isArray(parameterTypes) ? parameterTypes : [parameterTypes];
-
-		// Store metadata on the target's method property
-		// For static methods, target is the class constructor
-		const method = (target as AnyObj)[propertyKey];
-		if (method) {
-			(method as AnyObj)[parameterTypeSymbol] = paramTypesArray;
-		}
-
-		// Also store on descriptor value if available
-		if (descriptor && descriptor.value) {
-			(descriptor.value as AnyObj)[parameterTypeSymbol] = paramTypesArray;
-		}
-
-		// Store in a map on the controller class for reliable lookup
-		// This ensures we can find it even if the method is wrapped
-		if (!(target as AnyObj)[controllerParameterTypesMap]) {
-			(target as AnyObj)[controllerParameterTypesMap] = new Map<string, unknown>();
-		}
-		((target as AnyObj)[controllerParameterTypesMap] as Map<string, unknown>).set(
-			propertyKey,
-			paramTypesArray
-		);
-
-		return descriptor;
+	return (target: unknown, propertyKey: string, descriptor?: PropertyDescriptor) => {
+		const paramTypesArray = match(parameterTypes)
+			.when((p): p is TypeMetadata[] => Array.isArray(p), (p) => p)
+			.otherwise((p) => [p]);
+		return storeMetadata(target, propertyKey, descriptor, paramTypesArray, parameterTypeSymbol, controllerParameterTypesMap);
 	};
 }
 
-// Generate OpenAPI doc with controller methods included
+/**
+ * Generate OpenAPI doc with controller methods included
+ */
 export function getOpenApiDoc(api: RemultSveltekitServer, controllers: ClassType<unknown>[]) {
 	const spec = api.openApiDoc({ title: 'remult-planets', version: '1.0.0' });
 
-	// Add controller BackendMethods to the spec
-	for (const controller of controllers) {
-		const methods = (controller as AnyObj)[classBackendMethodsArray];
-		if (methods) {
-			for (const method of methods) {
-				const action = (method as AnyObj)[serverActionField];
-				if (action?.actionUrl) {
-					const path = `/api/${action.actionUrl}`;
-					const methodName = action.actionUrl.split('/').pop();
+	const methodsWithActions = pipe(
+		controllers,
+		flatMap((controller) => {
+			const methods = (controller as AnyObj)[classBackendMethodsArray] as unknown[] | undefined;
+			if (!methods) return [];
+			return methods.map((method) => ({
+				controller,
+				method,
+				action: (method as AnyObj)[serverActionField] as { actionUrl?: string } | undefined
+			}));
+		}),
+		filter((item) => item.action?.actionUrl !== undefined)
+	);
 
-					// Infer the response schema from the method
-					// Try multiple approaches to find the metadata
-					const inferredSchema = inferResponseSchema(method, controller, methodName);
+	for (const { controller, method, action } of methodsWithActions) {
+		const actionUrl = action!.actionUrl!;
+		const path = `/api/${actionUrl}`;
+		const methodName = actionUrl.split('/').pop() || '';
+		const inferredSchema = inferResponseSchema(method, controller, methodName);
+		const requestSchema = inferRequestSchema(method, controller, methodName);
 
-					// Wrap all responses in { data: ... } format
-					// Remult backend methods always return responses in this format
-					const responseSchema = {
-						type: 'object',
-						properties: {
-							data: inferredSchema
-						},
-						required: ['data']
-					};
-
-					// Infer the request schema from the method parameters
-					const requestSchema = inferRequestSchema(method, controller, methodName);
-
-					spec.paths[path] = {
-						post: {
-							tags: [controller.name],
-							summary: methodName,
-							description: `Backend method: ${action.actionUrl}`,
-							requestBody: {
-								content: {
-									'application/json': {
-										schema: requestSchema
-									}
+		spec.paths[path] = {
+			post: {
+				tags: [controller.name],
+				summary: methodName,
+				description: `Backend method: ${actionUrl}`,
+				requestBody: {
+					content: { 'application/json': { schema: requestSchema } }
+				},
+				responses: {
+					'200': {
+						description: 'Successful response',
+						content: {
+							'application/json': {
+								schema: {
+									type: 'object',
+									properties: { data: inferredSchema },
+									required: ['data']
 								}
-							},
-							responses: {
-								'200': {
-									description: 'Successful response',
-									content: {
-										'application/json': {
-											schema: responseSchema
-										}
-									}
-								},
-								'400': { description: 'Bad Request' },
-								'401': { description: 'Unauthorized' },
-								'403': { description: 'Forbidden' },
-								'500': { description: 'Internal Server Error' }
-							},
-							security: [{ bearerAuth: [] }]
+							}
 						}
-					};
-				}
+					},
+					'400': { description: 'Bad Request' },
+					'401': { description: 'Unauthorized' },
+					'403': { description: 'Forbidden' },
+					'500': { description: 'Internal Server Error' }
+				},
+				security: [{ bearerAuth: [] }]
 			}
-		}
+		};
 	}
 
 	return spec;
