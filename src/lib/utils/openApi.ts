@@ -408,7 +408,17 @@ export function getOpenApiDoc(api: RemultSveltekitServer, controllers: ClassType
 
 					// Infer the response schema from the method
 					// Try multiple approaches to find the metadata
-					const responseSchema = inferResponseSchema(method, controller, methodName);
+					const inferredSchema = inferResponseSchema(method, controller, methodName);
+
+					// Wrap all responses in { data: ... } format
+					// Remult backend methods always return responses in this format
+					const responseSchema = {
+						type: 'object',
+						properties: {
+							data: inferredSchema
+						},
+						required: ['data']
+					};
 
 					// Infer the request schema from the method parameters
 					const requestSchema = inferRequestSchema(method, controller, methodName);
