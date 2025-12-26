@@ -49,7 +49,7 @@ export const actions = {
 				data: dataUrl
 			};
 
-			await FilesController.uploadFile(fileData);
+			await FilesController.uploadFile({ fileData });
 			return { success: true };
 		} catch (error) {
 			return { error: error instanceof Error ? error.message : 'Failed to upload file' };

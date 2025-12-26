@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { BackendMethod } from 'remult';
 import { validateSchema } from '$lib/utils';
-import { Returns } from '$lib/utils/openApi';
+import { Returns, Accepts } from '$lib/utils/openApi';
 import {
 	FileDataSchema,
 	UploadFileResultSchema,
@@ -13,7 +13,8 @@ import {
 	type DeleteFileResult,
 	type DownloadUrlResult,
 	type FileInfo,
-	type UploadFileResult
+	type UploadFileResult,
+	PrefixSchema
 } from './fileSchemas';
 import { s3Client } from './s3Client';
 
@@ -37,8 +38,9 @@ export class FilesController {
 	 *   - contentType: The MIME type of the uploaded file
 	 */
 	@BackendMethod({ allowed: true })
+	@Accepts({ schema: FileDataSchema })
 	@Returns({ schema: UploadFileResultSchema })
-	static async uploadFile(fileData: FileDataSchema, path?: string): Promise<UploadFileResult> {
+	static async uploadFile({fileData, path}: {fileData: FileDataSchema, path?: string}): Promise<UploadFileResult> {
 		// Validate fileData
 		const validatedFileData = await validateSchema(FileDataSchema, fileData);
 
@@ -81,6 +83,7 @@ export class FilesController {
 	 *   - success: Boolean indicating whether the file was successfully deleted
 	 */
 	@BackendMethod({ allowed: true })
+	@Accepts({ schema: KeySchema })
 	@Returns({ schema: DeleteFileResultSchema })
 	static async deleteFile(key: KeySchema): Promise<DeleteFileResult> {
 		// Validate key
@@ -108,9 +111,10 @@ export class FilesController {
 	 */
 	@BackendMethod({ allowed: true })
 	@Returns({ schema: FileInfoSchema, isArray: true })
-	static async listFiles(prefix?: string): Promise<FileInfo[]> {
+	@Accepts({ schema: PrefixSchema })
+	static async listFiles(input?: PrefixSchema | undefined): Promise<FileInfo[]> {
 		// No validation needed for optional prefix (it's just a string filter)
-		const objects = await s3Client.listObjects('/', prefix || '');
+		const objects = await s3Client.listObjects('/', input?.prefix || '');
 
 		if (!objects) {
 			return [];
@@ -136,6 +140,7 @@ export class FilesController {
 	 *   - url: The API URL to download/access the file
 	 */
 	@BackendMethod({ allowed: true })
+	@Accepts({ schema: KeySchema })
 	@Returns({ schema: DownloadUrlResultSchema })
 	static async getDownloadUrl(key: KeySchema): Promise<DownloadUrlResult> {
 		// Validate key
