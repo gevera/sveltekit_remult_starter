@@ -1,10 +1,10 @@
+import { getOpenApiDoc } from '$lib/utils/openApi';
+import { api, controllers } from '$server/api.js';
 import { json } from '@sveltejs/kit';
-import { openApiDocument } from '$server/api';
 
 export const GET = ({ locals }) => {
 	if (!locals.user || !locals.session) {
 		return json({ error: 'Unauthorized' }, { status: 401 });
-	} else {
-		return json(openApiDocument);
 	}
+	return json(getOpenApiDoc(api, controllers));
 };

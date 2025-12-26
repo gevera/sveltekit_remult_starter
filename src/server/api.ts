@@ -1,4 +1,4 @@
-import { FilesController } from '$controllers/files/FilesController';
+import { FilesController, SampleController } from '$controllers';
 import { Planet } from '$entities/planets';
 import { env } from '$env/dynamic/private';
 import { auth } from '$modules/auth/server/index';
@@ -6,6 +6,9 @@ import { createClient } from '@libsql/client';
 import { SqlDatabase } from 'remult';
 import { remultApi } from 'remult/remult-sveltekit';
 import { TursoDataProvider } from 'remult/remult-turso';
+
+// List of controllers to include in OpenAPI
+export const controllers = [FilesController, SampleController];
 
 export const api = remultApi({
 	entities: [Planet],
@@ -18,7 +21,7 @@ export const api = remultApi({
 			})
 		)
 	),
-	controllers: [FilesController],
+	controllers,
 	modules: [
 		auth({
 			// Add some roles to some users with env variable.
@@ -26,5 +29,3 @@ export const api = remultApi({
 		})
 	]
 });
-
-export const openApiDocument = api.openApiDoc({ title: 'remult-planets', version: '1.0.0' });
