@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { openApiDocument } from '../../../../server/api';
+import { openApiDocument } from '$server/api';
 
 export const GET = ({ locals }) => {
 	if (!locals.user || !locals.session) {
