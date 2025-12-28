@@ -12,7 +12,7 @@
 		{#if user}
 			<span>Logged in as: {user.email}</span>
 			<form method="POST" action="/?/logout" use:enhance>
-				<button type="submit">Sign Out</button>
+				<button type="submit">Logout</button>
 			</form>
 		{:else}
 			<a href={route('/auth/login')}>Login</a>
